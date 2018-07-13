@@ -71,5 +71,14 @@ def generate_feature_vector_from_string(string, list_of_feature_functions=featur
     return features
 
 
+def debug(*msg):
+    import inspect
+    stack = str(inspect.stack()[1][1]) + '#' + str(inspect.stack()[1][2])
+    print(stack, end=' ')
+    for ms in msg:
+        print(ms, end=' ')
+    print('')
+
+
 if __name__ == '__main__':
     print(generate_feature_vector_from_string('_jdsfh4*&('))
