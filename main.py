@@ -170,73 +170,95 @@ def load_data(file_path):
 
 
 def main():
-    train_identifiers, train_classes = load_data('data/train_tokens.csv')
-    model = Model(input_vocab_size=128, emb_size=32,
-                  encoder_hidden_dim=16, hidden_sizes=[8,4], output_size=2)
+    positive_class_probs = []
+    negative_class_probs = []
     criterion = nn.CrossEntropyLoss()
-    optimizer = Adam(model.parameters())#SGD(model.parameters(),lr=lr)
-    n_epochs = 30
-    losses = []
-    batch_size = 32
-    train_x_batches, train_y_batches = make_batches(train_identifiers, train_classes, batch_size)
-    print(len(train_x_batches), len(train_y_batches))
+    n_epochs = 10
+    train_identifiers, train_classes = load_data('data/train_tokens.csv')
+    valid_identifiers, valid_classes = load_data('data/valid_tokens.csv')
+    valid_ident_var_arr = [string_to_index_variable(string) for string in valid_identifiers]
+    valid_classes_var_arr = [Variable(torch.LongTensor([class_])) for class_ in valid_classes]
+    buggy_example_identifiers = None
+    buggy_example_classes = None
+    for iter in range(10):
+        if buggy_example_identifiers is not None and buggy_example_classes is not None:
+            train_identifiers.extend(buggy_example_identifiers)
+            train_classes.extend(buggy_example_classes)
+        buggy_example_identifiers = None
+        buggy_example_classes = None
+        model = Model(input_vocab_size=128, emb_size=32,
+                      encoder_hidden_dim=16, hidden_sizes=[8,4], output_size=2)
+        optimizer = Adam(model.parameters())#SGD(model.parameters(),lr=lr)
+        losses = train_all(model, n_epochs, criterion, train_classes, optimizer, train_identifiers)
+        # torch.save(model, 'model.bin')
+        # model = torch.load('model.bin')
+        predicted_classes = []
+        positive_class_activations = []
+        negative_class_activations = []
+        num_correct = 0
+        for i, a in enumerate(valid_ident_var_arr):
+            output, activation_status, hidden = predict(model, a)
+            b = valid_classes_var_arr[i]
+            top_n, top_i = output.data.topk(2)
+            all_activations = []
+            for x in activation_status:
+                all_activations.extend(x)
+            actual_class = int(b.data[0])
+            predicted_class = int(top_i[0][0])
+            if actual_class == 1:
+                positive_class_activations.append(all_activations)
+            else:
+                negative_class_activations.append(all_activations)
+            correctly_classified = (predicted_class == actual_class)
+            if not correctly_classified:
+                if buggy_example_identifiers is None:
+                    buggy_example_identifiers = [valid_identifiers[i]]
+                    buggy_example_classes = [actual_class]
+                else:
+                    buggy_example_identifiers.append(valid_identifiers[i])
+                    buggy_example_classes.append(actual_class)
+            else:
+                num_correct += 1
+            predicted_classes.append(predicted_class)
+        # util.debug(buggy_example_identifiers)
+        # util.debug(buggy_example_classes)
+        accuracy = num_correct * 1.0 / len(valid_classes_var_arr)
+        util.debug('Iteration : ', iter, '\tAccuracy: ', accuracy,
+                   '\tMisclassified : ', len(buggy_example_classes), )
+        positive_probs, negative_probs = post_process_activation_statuses(
+                                positive_class_activations, negative_class_activations)
+        positive_class_probs.append(positive_probs)
+        negative_class_probs.append(negative_probs)
+    write_to_csv(positive_class_probs, 'positive_probabilities.csv')
+    write_to_csv(negative_class_probs, 'negative_probabilities.csv')
 
+
+def write_to_csv(list_of_list, file_name):
+    with open(file_name, 'w') as file:
+        for list_of_values in list_of_list:
+            string = format_double_list(list_of_values)
+            file.write(string + '\n')
+        file.close()
+
+
+def train_all(model, n_epochs, criterion, train_classes, optimizer, train_identifiers):
+    losses = []
     X_ = [string_to_index_variable(string) for string in train_identifiers]
     Y_ = [Variable(torch.LongTensor([[int(class_)]])) for class_ in train_classes]
-
     import datetime as dt
-    # for iter in range(n_epochs):
-    #     n1 = dt.datetime.now()
-    #     total_loss = 0
-    #     for X, Y in zip(X_, Y_):
-    #         l = train(model, criterion=criterion, optimizer=optimizer,
-    #                   string_tensor=X, class_tensor=Y)
-    #         total_loss += l
-    #     n2 = dt.datetime.now()
-    #     elapsed_time = (n2-n1).seconds
-    #     util.debug('Epoch : ', iter, '\tLoss: ', float(total_loss),
-    #                '\tTime Elapsed : ', elapsed_time, ' seconds')
-    #     losses.append(total_loss)
-    # torch.save(model, 'model.bin')
-    model = torch.load('model.bin')
-    test_identifiers, test_classes = load_data('data/test_tokens.csv')
-
-    test_acc = calculate_test_accuracy(model, test_identifiers, test_classes)
-    print('After Iteration :  0 Total Loss : ----------- Test Accuracy : %.5lf Time : ---- minutes, '
-          'ETA : ------ minutes' % (test_acc))
-    test_identifiers, test_classes = load_data('data/test_tokens.csv')
-    test_ident_var_arr = [string_to_index_variable(string) for string in test_identifiers]
-    test_classes_var_arr = [Variable(torch.LongTensor([class_])) for class_ in test_classes]
-    predicted_classes = []
-    out = open('test_results.txt', 'w')
-    positive_class_activations = []
-    negative_class_activations = []
-    for i, a in enumerate(test_ident_var_arr):
-        output, activation_status, hidden = predict(model, a)
-        b = test_classes_var_arr[i]
-        top_n, top_i = output.data.topk(2)
-        out_str = '' #str(hidden) + '\t'
-        all_activations = []
-        for x in activation_status:
-            out_str += (str(x) + '\t')
-            all_activations.extend(x)
-        actual_class = int(b.data[0])
-        predicted_class = int(top_i[0][0])
-        if actual_class == 1:
-            positive_class_activations.append(all_activations)
-        else:
-            negative_class_activations.append(all_activations)
-        out_str += (str(predicted_class) + '\t') # predicted class
-        out_str += (str(actual_class) + '\t') # original class
-        out_str += (test_identifiers[i] + '\n') # original identifier
-        out.write(out_str)
-        correctly_classified = (predicted_class == actual_class)
-        print(predicted_class,  actual_class, correctly_classified, test_identifiers[i])
-        predicted_classes.append(predicted_class)
-    out.close()
-    print(accuracy_score(test_classes, predicted_classes))
-    plt.show()
-    post_process_activation_statuses(positive_class_activations, negative_class_activations)
+    for epoch in range(n_epochs):
+        n1 = dt.datetime.now()
+        total_loss = 0
+        for X, Y in zip(X_, Y_):
+            l = train(model, criterion=criterion, optimizer=optimizer,
+                      string_tensor=X, class_tensor=Y)
+            total_loss += l
+        n2 = dt.datetime.now()
+        elapsed_time = (n2 - n1).seconds
+        # util.debug('Epoch : ', epoch, '\tLoss: ', float(total_loss),
+        #            '\tTime Elapsed : ', elapsed_time, ' seconds')
+        losses.append(total_loss)
+    return losses
 
 
 def post_process_activation_statuses(positive_class_activations, negative_class_activations):
@@ -246,8 +268,8 @@ def post_process_activation_statuses(positive_class_activations, negative_class_
                                         positive_class_activations)
     negative_class_activation_probability_vector = create_probability_vector(
                                         negative_class_activations)
-    util.debug(positive_class_activation_probability_vector, '\n',
-               negative_class_activation_probability_vector)
+    return positive_class_activation_probability_vector, \
+           negative_class_activation_probability_vector
     pass
 
 
@@ -262,7 +284,6 @@ def create_probability_vector(class_activations):
 def format_double_list(l):
     string_arr = [str(x) for x in l]
     string = ','.join(string_arr)
-    string = '[' + string + ']'
     return string
 
 
